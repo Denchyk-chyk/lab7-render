@@ -1,49 +1,41 @@
 const express = require("express");
 const { Pool } = require("pg");
 const Joi = require("joi");
+const cors = require("cors");
 require("dotenv").config();
+
 const app = express();
 app.use(express.json());
-const cors = require("cors");
 app.use(cors());
 
-// Налаштування підключення до PostgreSQL
+// Налаштування для хмарної бази даних
+// Використовуємо лише DATABASE_URL. SSL необхідний для більшості хмарних провайдерів.
 const pool = new Pool({
-  user: process.env.DB_USER || "postgres",
-  host: process.env.DB_HOST || "localhost",
-  database: process.env.DB_NAME || "my_database",
-  password: process.env.DB_PASSWORD || "password",
-  port: process.env.DB_PORT || 5432,
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false, // Дозволяє підключатися до хмарних баз без перевірки сертифікатів
+  },
 });
 
-// Схема валідації за допомогою Joi
+// Схема валідації Joi
 const userSchema = Joi.object({
-  name: Joi.string().min(2).required().messages({
-    "string.min": "Ім’я має містити мінімум 2 символи",
-  }),
-  email: Joi.string().email().required().messages({
-    "string.email": "Введіть коректну адресу email",
-  }),
+  name: Joi.string().min(2).required(),
+  email: Joi.string().email().required(),
   age: Joi.number().integer().min(1).max(120).required(),
   comment: Joi.string().allow("", null).max(500),
 });
 
-// 0. GET: Перевірка стану сервера
+// Маршрут для моніторингу (Health Check)
 app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-// 1. POST: Збереження користувача
+// Збереження користувача
 app.post("/api/users", async (req, res) => {
-  // Валідація вхідних даних
   const { error, value } = userSchema.validate(req.body);
-
-  if (error) {
-    return res.status(400).json({ error: error.details[0].message });
-  }
+  if (error) return res.status(400).json({ error: error.details[0].message });
 
   const { name, email, age, comment } = value;
-
   try {
     const result = await pool.query(
       "INSERT INTO users (name, email, age, comment) VALUES ($1, $2, $3, $4) RETURNING *",
@@ -51,15 +43,13 @@ app.post("/api/users", async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    if (err.code === "23505") {
-      // Код помилки для Duplicate Key (email)
-      return res.status(400).json({ error: "Цей email вже зареєстровано" });
-    }
-    res.status(500).json({ error: "Помилка сервера" });
+    if (err.code === "23505")
+      return res.status(400).json({ error: "Email вже існує" });
+    res.status(500).json({ error: "DB Error" });
   }
 });
 
-// 2. GET: Отримання списку користувачів
+// Отримання користувачів
 app.get("/api/users", async (req, res) => {
   try {
     const result = await pool.query(
@@ -67,9 +57,12 @@ app.get("/api/users", async (req, res) => {
     );
     res.json(result.rows);
   } catch (err) {
-    res.status(500).json({ error: "Помилка сервера" });
+    res.status(500).json({ error: "DB Error" });
   }
 });
 
-const PORT = 3000;
-app.listen(PORT, () => console.log(`Сервер запущено на порту ${PORT}`));
+// Динамічний порт для хмари
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Cloud Server is running on port ${PORT}`);
+});
